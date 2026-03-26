@@ -1,0 +1,5 @@
+{
+  "name": "TuneStream",
+  "description": "A YouTube-powered music streaming app with a sleek Spotify-inspired interface.",
+  "requestFramePermissions": []
+}
