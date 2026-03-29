@@ -28,14 +28,20 @@ import {
   GripVertical,
   Radio,
   Sparkles,
-  Mic2
+  Mic2,
+  Filter,
+  Plus
 } from 'lucide-react';
 import { motion, AnimatePresence, Reorder } from 'motion/react';
+import { Toaster, toast } from 'sonner';
 import YouTube, { YouTubeProps } from 'react-youtube';
 import { cn } from './lib/utils';
 import { Track, Playlist } from './types';
 import { searchYouTube, getTrendingMusic, searchPlaylists, getPlaylistItems } from './services/youtube';
 import { fetchLyrics } from './services/lyrics';
+import { PlayerControls } from './components/PlayerControls';
+import { Skeleton, TrackSkeleton, PlaylistSkeleton } from './components/Skeleton';
+import { Visualizer } from './components/Visualizer';
 
 export interface QueueTrack extends Track {
   queueId: string;
@@ -51,15 +57,16 @@ export default function App() {
   const [volume, setVolume] = useState(50);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [apiKeyMissing, setApiKeyMissing] = useState(false);
   const [isFullScreenPlayerOpen, setIsFullScreenPlayerOpen] = useState(false);
   const [queue, setQueue] = useState<QueueTrack[]>([]);
   const [isQueueOpen, setIsQueueOpen] = useState(false);
   const [isAutoplayEnabled, setIsAutoplayEnabled] = useState(true);
+  const [isShuffle, setIsShuffle] = useState(false);
+  const [repeatMode, setRepeatMode] = useState<'none' | 'all' | 'one'>('none');
+  const [history, setHistory] = useState<Track[]>([]);
   const [lyrics, setLyrics] = useState<string | null>(null);
   const [isLyricsOpen, setIsLyricsOpen] = useState(false);
   const [isLoadingLyrics, setIsLoadingLyrics] = useState(false);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   
   // Playlist states
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
@@ -75,6 +82,7 @@ export default function App() {
   const playerRef = useRef<any>(null);
 
   useEffect(() => {
+    playerRef.current = null; // Clear player reference when track changes to avoid using unmounted player
     if (currentTrack) {
       setIsLoadingLyrics(true);
       setLyrics(null);
@@ -86,9 +94,6 @@ export default function App() {
   }, [currentTrack]);
 
   useEffect(() => {
-    if (!import.meta.env.VITE_YOUTUBE_API_KEY) {
-      setApiKeyMissing(true);
-    }
     const fetchTrending = async () => {
       const tracks = await getTrendingMusic();
       setTrendingTracks(tracks);
@@ -117,8 +122,19 @@ export default function App() {
   };
 
   const playTrack = (track: Track) => {
+    if (currentTrack?.id === track.id) {
+      togglePlay();
+      return;
+    }
+    
+    // Add current track to history before switching
+    if (currentTrack) {
+      setHistory(prev => [currentTrack, ...prev].slice(0, 50));
+    }
+    
     setCurrentTrack(track);
     setIsPlaying(true);
+    playerRef.current = null; // Reset player ref for new track
   };
 
   const addToQueue = (e: React.MouseEvent, track: Track) => {
@@ -228,9 +244,28 @@ export default function App() {
   };
 
   const playNext = async () => {
+    if (repeatMode === 'one' && currentTrack) {
+      if (playerRef.current && typeof playerRef.current.seekTo === 'function') {
+        playerRef.current.seekTo(0);
+        playerRef.current.playVideo();
+      } else {
+        const track = { ...currentTrack };
+        setCurrentTrack(null);
+        setTimeout(() => setCurrentTrack(track), 10);
+      }
+      return;
+    }
+
     if (queue.length > 0) {
-      const nextTrack = queue[0];
-      setQueue(prev => prev.slice(1));
+      let nextTrackIndex = 0;
+      if (isShuffle) {
+        nextTrackIndex = Math.floor(Math.random() * queue.length);
+      }
+      
+      const nextTrack = queue[nextTrackIndex];
+      const newQueue = [...queue];
+      newQueue.splice(nextTrackIndex, 1);
+      setQueue(newQueue);
       playTrack(nextTrack);
     } else if (isAutoplayEnabled && currentTrack) {
       try {
@@ -245,29 +280,97 @@ export default function App() {
           playTrack(nextTrack);
         } else {
           setIsPlaying(false);
-          if (playerRef.current) playerRef.current.stopVideo();
+          if (playerRef.current) {
+            try {
+              if (typeof playerRef.current.stopVideo === 'function') {
+                playerRef.current.stopVideo();
+              }
+            } catch (e) {
+              console.error('Player control error:', e);
+              playerRef.current = null;
+            }
+          }
         }
       } catch (e) {
         setIsPlaying(false);
-        if (playerRef.current) playerRef.current.stopVideo();
+        if (playerRef.current) {
+          try {
+            if (typeof playerRef.current.stopVideo === 'function') {
+              playerRef.current.stopVideo();
+            }
+          } catch (e) {
+            console.error('Player control error:', e);
+            playerRef.current = null;
+          }
+        }
       }
+    } else if (repeatMode === 'all' && history.length > 0) {
+      // Simple repeat all: play the oldest track in history or first in queue if we had one
+      // For now, let's just stop or play the first track if we have a list context
+      setIsPlaying(false);
     } else {
       setIsPlaying(false);
-      if (playerRef.current) playerRef.current.stopVideo();
+      if (playerRef.current) {
+        try {
+          if (typeof playerRef.current.stopVideo === 'function') {
+            playerRef.current.stopVideo();
+          }
+        } catch (e) {
+          console.error('Player control error:', e);
+          playerRef.current = null;
+        }
+      }
     }
   };
 
   const playPrevious = () => {
     if (progress > 3 && playerRef.current) {
-      playerRef.current.seekTo(0);
+      try {
+        if (typeof playerRef.current.seekTo === 'function') {
+          playerRef.current.seekTo(0);
+        }
+      } catch (e) {
+        console.error('Player control error:', e);
+        playerRef.current = null;
+      }
+    } else if (history.length > 0) {
+      const prevTrack = history[0];
+      setHistory(prev => prev.slice(1));
+      
+      // Switch to previous track
+      setCurrentTrack(prevTrack);
+      setIsPlaying(true);
+      playerRef.current = null;
     } else {
-      if (playerRef.current) playerRef.current.seekTo(0);
+      // Fallback to start of current track if no history
+      if (playerRef.current) {
+        try {
+          if (typeof playerRef.current.seekTo === 'function') {
+            playerRef.current.seekTo(0);
+          }
+        } catch (e) {
+          console.error('Player control error:', e);
+          playerRef.current = null;
+        }
+      }
     }
+  };
+
+  const toggleShuffle = () => setIsShuffle(!isShuffle);
+  const toggleRepeat = () => {
+    const modes: ('none' | 'all' | 'one')[] = ['none', 'all', 'one'];
+    const currentIndex = modes.indexOf(repeatMode);
+    setRepeatMode(modes[(currentIndex + 1) % modes.length]);
   };
 
   const togglePlay = () => {
     if (playerRef.current) {
       try {
+        // Check if player is actually ready and has the methods
+        if (typeof playerRef.current.getPlayerState !== 'function') {
+          throw new Error('Player not ready');
+        }
+        
         const state = playerRef.current.getPlayerState();
         if (state === 1) { // playing
           playerRef.current.pauseVideo();
@@ -278,6 +381,8 @@ export default function App() {
         }
       } catch (e) {
         console.error('Player control error:', e);
+        // Clear ref if it's invalid
+        playerRef.current = null;
         // Fallback: just toggle state if player object is finicky
         setIsPlaying(!isPlaying);
       }
@@ -301,7 +406,9 @@ export default function App() {
     if (event.data === 100) message = 'Video not found or removed.';
     if (event.data === 101 || event.data === 150) message = 'Embedding restricted by uploader.';
     
-    alert(`Playback Error: ${message} Try another track.`);
+    toast.error(`Playback Error: ${message}`, {
+      description: 'Try another track or check if the video is available in your region.'
+    });
     setIsPlaying(false);
   };
 
@@ -358,96 +465,8 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-[#141218] text-[#E6E0E9] font-sans overflow-hidden selection:bg-[#D0BCFF] selection:text-[#381E72]">
-      {/* Sidebar */}
-      <AnimatePresence initial={false}>
-        {isSidebarOpen && (
-          <motion.aside 
-            initial={{ width: 0, opacity: 0 }}
-            animate={{ width: 288, opacity: 1 }}
-            exit={{ width: 0, opacity: 0 }}
-            transition={{ duration: 0.3, ease: "easeInOut" }}
-            className="flex flex-col p-4 space-y-8 overflow-hidden shrink-0"
-          >
-            <div className="flex items-center space-x-3 px-4 py-2 whitespace-nowrap">
-              <div className="w-10 h-10 bg-[#D0BCFF] rounded-2xl flex items-center justify-center shadow-sm shrink-0">
-                <Play className="w-6 h-6 text-[#381E72] fill-current" />
-              </div>
-              <span className="text-2xl font-bold tracking-tight text-[#E6E0E9]">TuneStream</span>
-            </div>
-
-            <nav className="space-y-2 flex-1 w-64">
-              <button 
-                onClick={() => setActiveTab('home')}
-                className={cn(
-                  "flex items-center space-x-4 w-full px-5 py-4 rounded-full transition-all duration-300 font-medium",
-                  activeTab === 'home' ? "bg-[#4A4458] text-[#E8DEF8]" : "text-[#CAC4D0] hover:bg-[#2B2930] hover:text-[#E6E0E9]"
-                )}
-              >
-                <Home className={cn("w-6 h-6 shrink-0", activeTab === 'home' && "fill-current")} />
-                <span className="text-lg whitespace-nowrap">Home</span>
-              </button>
-              <button 
-                onClick={() => setActiveTab('search')}
-                className={cn(
-                  "flex items-center space-x-4 w-full px-5 py-4 rounded-full transition-all duration-300 font-medium",
-                  activeTab === 'search' ? "bg-[#4A4458] text-[#E8DEF8]" : "text-[#CAC4D0] hover:bg-[#2B2930] hover:text-[#E6E0E9]"
-                )}
-              >
-                <Search className="w-6 h-6 shrink-0" />
-                <span className="text-lg whitespace-nowrap">Search</span>
-              </button>
-              <button 
-                onClick={() => setActiveTab('library')}
-                className={cn(
-                  "flex items-center space-x-4 w-full px-5 py-4 rounded-full transition-all duration-300 font-medium",
-                  activeTab === 'library' ? "bg-[#4A4458] text-[#E8DEF8]" : "text-[#CAC4D0] hover:bg-[#2B2930] hover:text-[#E6E0E9]"
-                )}
-              >
-                <Library className={cn("w-6 h-6 shrink-0", activeTab === 'library' && "fill-current")} />
-                <span className="text-lg whitespace-nowrap">Your Library</span>
-              </button>
-            </nav>
-
-            <div className="space-y-2 pt-4 w-64">
-              <button 
-                onClick={() => setIsCreatePlaylistModalOpen(true)}
-                className="flex items-center space-x-4 w-full px-5 py-4 rounded-full text-[#CAC4D0] hover:bg-[#2B2930] hover:text-[#E6E0E9] transition-all duration-300 font-medium"
-              >
-                <div className="bg-[#E8DEF8] p-1.5 rounded-lg shrink-0">
-                  <PlusSquare className="w-5 h-5 text-[#4A4458]" />
-                </div>
-                <span className="text-lg whitespace-nowrap">Create Playlist</span>
-              </button>
-              <button className="flex items-center space-x-4 w-full px-5 py-4 rounded-full text-[#CAC4D0] hover:bg-[#2B2930] hover:text-[#E6E0E9] transition-all duration-300 font-medium">
-                <div className="bg-[#FFD8E4] p-1.5 rounded-lg shrink-0">
-                  <Heart className="w-5 h-5 text-[#631133] fill-current" />
-                </div>
-                <span className="text-lg whitespace-nowrap">Liked Songs</span>
-              </button>
-            </div>
-
-            {/* User Playlists in Sidebar */}
-            {playlists.length > 0 && (
-              <div className="pt-4 border-t border-white/10 flex-1 overflow-y-auto no-scrollbar space-y-1 w-64">
-                <h3 className="text-xs font-bold text-[#CAC4D0] uppercase tracking-wider px-5 mb-2 whitespace-nowrap">Your Playlists</h3>
-                {playlists.map(playlist => (
-                  <button 
-                    key={playlist.id}
-                    onClick={() => openUserPlaylist(playlist)}
-                    className={cn(
-                      "flex items-center space-x-3 w-full px-5 py-2.5 rounded-full transition-all duration-300 text-sm font-medium",
-                      activePlaylist?.id === playlist.id && activeTab === 'playlist' ? "bg-[#4A4458] text-[#E8DEF8]" : "text-[#CAC4D0] hover:bg-[#2B2930] hover:text-[#E6E0E9]"
-                    )}
-                  >
-                    <span className="truncate">{playlist.name}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </motion.aside>
-        )}
-      </AnimatePresence>
-
+      <Toaster position="top-right" richColors closeButton />
+      
       {/* Modals */}
       <AnimatePresence>
         {isCreatePlaylistModalOpen && (
@@ -545,21 +564,23 @@ export default function App() {
       </AnimatePresence>
 
       {/* Main Content */}
-      <main className={cn("flex-1 bg-[#1D1B20] rounded-[2rem] my-4 overflow-y-auto relative shadow-sm border border-white/5 transition-all duration-300", isSidebarOpen ? "mr-4" : "mx-4")}>
+      <main className="flex-1 bg-[#1D1B20] rounded-[2rem] my-4 mx-4 overflow-y-auto relative shadow-sm border border-white/5 transition-all duration-300">
         <header className="sticky top-0 z-10 p-6 flex justify-between items-center bg-[#1D1B20]/80 backdrop-blur-xl border-b border-white/5">
-          <div className="flex space-x-3 items-center">
-            <button 
-              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-              className="w-10 h-10 bg-[#2B2930] rounded-full flex items-center justify-center hover:bg-[#36343B] transition-colors text-[#CAC4D0] mr-2"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
-            </button>
-            <button className="w-10 h-10 bg-[#2B2930] rounded-full flex items-center justify-center hover:bg-[#36343B] transition-colors text-[#CAC4D0]">
-              <SkipBack className="w-5 h-5" />
-            </button>
-            <button className="w-10 h-10 bg-[#2B2930] rounded-full flex items-center justify-center hover:bg-[#36343B] transition-colors text-[#CAC4D0]">
-              <SkipForward className="w-5 h-5" />
-            </button>
+          <div className="flex space-x-6 items-center">
+            <div className="flex items-center space-x-3">
+              <div className="w-8 h-8 bg-[#D0BCFF] rounded-xl flex items-center justify-center shadow-sm">
+                <Play className="w-5 h-5 text-[#381E72] fill-current" />
+              </div>
+              <span className="text-xl font-bold tracking-tight text-[#E6E0E9]">TuneStream</span>
+            </div>
+            <div className="flex space-x-2">
+              <button className="w-10 h-10 bg-[#2B2930] rounded-full flex items-center justify-center hover:bg-[#36343B] transition-colors text-[#CAC4D0]">
+                <SkipBack className="w-5 h-5" />
+              </button>
+              <button className="w-10 h-10 bg-[#2B2930] rounded-full flex items-center justify-center hover:bg-[#36343B] transition-colors text-[#CAC4D0]">
+                <SkipForward className="w-5 h-5" />
+              </button>
+            </div>
           </div>
           
           <div className="flex items-center space-x-4">
@@ -572,71 +593,70 @@ export default function App() {
           </div>
         </header>
 
-        <div className="p-8 pt-4 pb-32">
-          {apiKeyMissing && (
-            <div className="mb-8 p-4 bg-amber-500/20 border border-amber-500/50 rounded-lg flex items-center justify-between">
-              <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 bg-amber-500 rounded-full flex items-center justify-center text-black">
-                  <SearchIcon className="w-6 h-6" />
-                </div>
-                <div>
-                  <h4 className="font-bold text-amber-500">YouTube API Key Missing</h4>
-                  <p className="text-sm text-zinc-300">Search and trending music require a YouTube API Key. Add it to the Secrets panel as <code className="bg-black/40 px-1 rounded text-white">YOUTUBE_API_KEY</code>.</p>
-                </div>
-              </div>
-              <a 
-                href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" 
-                target="_blank" 
-                rel="noopener noreferrer"
-                className="text-sm font-bold hover:underline"
-              >
-                Get Key
-              </a>
-            </div>
-          )}
+        <div className="p-8 pt-4 pb-80">
           {activeTab === 'home' && (
-            <section className="space-y-12">
-              {/* Hero Section */}
-              <div className="relative overflow-hidden rounded-[3rem] bg-gradient-to-br from-[#381E72] to-[#141218] p-10 lg:p-16 border border-white/10 shadow-2xl">
-                <div className="relative z-10 max-w-2xl">
-                  <h2 className="text-5xl lg:text-7xl font-extrabold tracking-tight text-[#E8DEF8] mb-6 leading-tight">
-                    Discover your <br/><span className="text-[#D0BCFF]">next favorite</span>
-                  </h2>
-                  <p className="text-xl text-[#CAC4D0] mb-8 font-medium">Explore trending hits and curated playlists tailored for you.</p>
-                  <button 
-                    onClick={() => setActiveTab('search')}
-                    className="bg-[#D0BCFF] text-[#381E72] px-8 py-4 rounded-full font-bold text-lg hover:bg-[#E8DEF8] transition-colors shadow-lg flex items-center gap-3"
-                  >
-                    <SearchIcon className="w-6 h-6" />
-                    Start Exploring
-                  </button>
+            <section className="space-y-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
+              {/* Hero Section - Bento Style */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="lg:col-span-2 relative overflow-hidden rounded-[3rem] bg-gradient-to-br from-[#381E72] to-[#141218] p-10 lg:p-16 border border-white/10 shadow-2xl group">
+                  <div className="relative z-10 max-w-xl">
+                    <h2 className="text-5xl lg:text-7xl font-extrabold tracking-tight text-[#E8DEF8] mb-6 leading-tight font-display">
+                      Discover your <br/><span className="text-[#D0BCFF] text-glow">next favorite</span>
+                    </h2>
+                    <p className="text-xl text-[#CAC4D0] mb-8 font-medium">Explore trending hits and curated playlists tailored for you.</p>
+                    <button 
+                      onClick={() => setActiveTab('search')}
+                      className="bg-[#D0BCFF] text-[#381E72] px-8 py-4 rounded-full font-bold text-lg hover:bg-[#E8DEF8] transition-all shadow-lg flex items-center gap-3 hover:scale-105 active:scale-95"
+                    >
+                      <SearchIcon className="w-6 h-6" />
+                      Start Exploring
+                    </button>
+                  </div>
+                  <div className="absolute -right-20 -bottom-20 w-96 h-96 bg-[#D0BCFF] rounded-full mix-blend-overlay filter blur-[100px] opacity-30 group-hover:opacity-40 transition-opacity duration-700"></div>
+                  <div className="absolute right-40 -top-20 w-72 h-72 bg-[#FFD8E4] rounded-full mix-blend-overlay filter blur-[80px] opacity-20 group-hover:opacity-30 transition-opacity duration-700"></div>
                 </div>
-                <div className="absolute -right-20 -bottom-20 w-96 h-96 bg-[#D0BCFF] rounded-full mix-blend-overlay filter blur-[100px] opacity-30"></div>
-                <div className="absolute right-40 -top-20 w-72 h-72 bg-[#FFD8E4] rounded-full mix-blend-overlay filter blur-[80px] opacity-20"></div>
+
+                <div className="bg-[#2B2930] rounded-[3rem] p-8 border border-white/5 flex flex-col justify-between relative overflow-hidden group">
+                  <div className="relative z-10">
+                    <Sparkles className="w-10 h-10 text-[#D0BCFF] mb-4" />
+                    <h3 className="text-2xl font-bold text-[#E6E0E9] mb-2 font-display">Daily Mix</h3>
+                    <p className="text-[#CAC4D0] text-sm">A special selection of tracks picked just for you based on your history.</p>
+                  </div>
+                  <button 
+                    onClick={handleGenerateQueue}
+                    className="relative z-10 mt-6 w-full py-4 bg-white/5 hover:bg-white/10 rounded-2xl text-[#E6E0E9] font-bold transition-all border border-white/10 flex items-center justify-center gap-2 group-hover:border-[#D0BCFF]/30"
+                  >
+                    Generate Mix
+                  </button>
+                  <div className="absolute -right-10 -bottom-10 w-40 h-40 bg-[#381E72] rounded-full blur-3xl opacity-20 group-hover:opacity-40 transition-opacity"></div>
+                </div>
               </div>
 
               {/* User Playlists */}
               {playlists.length > 0 && (
                 <div>
                   <div className="flex justify-between items-end mb-8 px-2">
-                    <h3 className="text-3xl font-extrabold tracking-tight text-[#E6E0E9]">Your Playlists</h3>
+                    <h3 className="text-3xl font-extrabold tracking-tight text-[#E6E0E9] font-display">Your Playlists</h3>
                   </div>
                   <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-6">
                     {playlists.map((playlist) => (
                       <motion.div 
                         key={playlist.id}
                         whileHover={{ y: -8, scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
                         className="bg-[#2B2930] p-5 rounded-[2rem] hover:bg-[#36343B] transition-all duration-300 group cursor-pointer border border-white/5 shadow-md"
                         onClick={() => openUserPlaylist(playlist)}
                       >
                         <div className="relative mb-5 aspect-square rounded-2xl overflow-hidden bg-[#4A4458] flex items-center justify-center shadow-inner">
                           {playlist.image ? (
-                            <img src={playlist.image} alt={playlist.name} className="w-full h-full object-cover" />
+                            <img src={playlist.image} alt={playlist.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" />
                           ) : (
                             <ListMusic className="w-12 h-12 text-[#CAC4D0] opacity-50" />
                           )}
                           <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-sm">
-                            <Play className="w-12 h-12 text-[#D0BCFF] fill-current" />
+                            <div className="w-14 h-14 bg-[#D0BCFF] rounded-full flex items-center justify-center shadow-xl scale-75 group-hover:scale-100 transition-transform duration-300">
+                              <Play className="w-7 h-7 text-[#381E72] fill-current ml-1" />
+                            </div>
                           </div>
                         </div>
                         <h4 className="font-bold text-lg text-[#E6E0E9] truncate mb-1">{playlist.name}</h4>
@@ -648,80 +668,83 @@ export default function App() {
               )}
 
               {/* Recommended Playlists */}
-              {isLoadingRecommendations ? (
-                <div className="flex justify-center py-12">
-                  <div className="w-8 h-8 border-4 border-[#D0BCFF] border-t-transparent rounded-full animate-spin"></div>
-                </div>
-              ) : recommendedPlaylists.length > 0 && (
-                <div className="space-y-12">
-                  {recommendedPlaylists.map((category, idx) => (
-                    <div key={idx}>
-                      <div className="flex justify-between items-end mb-8 px-2">
-                        <h3 className="text-3xl font-extrabold tracking-tight text-[#E6E0E9]">{category.title}</h3>
-                      </div>
-                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-6">
-                        {category.items.map((playlist) => (
-                          <motion.div 
-                            key={playlist.id}
-                            whileHover={{ y: -8, scale: 1.02 }}
-                            className="bg-[#2B2930] p-5 rounded-[2rem] hover:bg-[#36343B] transition-all duration-300 group cursor-pointer border border-white/5 shadow-md"
-                            onClick={() => openYoutubePlaylist(playlist.id, playlist.name, playlist.image)}
-                          >
-                            <div className="relative mb-5 aspect-square rounded-2xl overflow-hidden shadow-inner">
-                              <img src={playlist.image} alt={playlist.name} className="w-full h-full object-cover" />
-                              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-sm">
-                                <Play className="w-12 h-12 text-[#D0BCFF] fill-current" />
-                              </div>
-                            </div>
-                            <h4 className="font-bold text-lg text-[#E6E0E9] truncate mb-1">{playlist.name}</h4>
-                            <p className="text-sm text-[#CAC4D0] font-medium truncate">{playlist.channelTitle}</p>
-                          </motion.div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Trending Now */}
-              {trendingTracks.length > 0 && (
-                <div>
-                  <div className="flex justify-between items-end mb-8 px-2">
-                    <h3 className="text-3xl font-extrabold tracking-tight text-[#E6E0E9]">Trending Now</h3>
-                  </div>
-                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-6">
-                    {trendingTracks.map((track) => (
-                      <motion.div 
-                        key={track.id}
-                        whileHover={{ y: -8, scale: 1.02 }}
-                        className="bg-[#2B2930] p-5 rounded-[2rem] hover:bg-[#36343B] transition-all duration-300 group cursor-pointer border border-white/5 shadow-md"
-                        onClick={() => playTrack(track)}
-                      >
-                        <div className="relative mb-5 aspect-square rounded-2xl overflow-hidden shadow-inner">
-                          <img src={track.thumbnail} alt={track.title} className="w-full h-full object-cover" />
-                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-sm gap-3">
-                            <button 
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setTrackToAdd(track);
-                                setIsAddToPlaylistModalOpen(true);
-                              }} 
-                              className="w-12 h-12 bg-[#4A4458] rounded-full flex items-center justify-center hover:bg-[#D0BCFF] hover:text-[#381E72] text-[#E8DEF8] transition-colors shadow-lg"
-                            >
-                              <PlusSquare className="w-5 h-5" />
-                            </button>
-                            <button className="w-14 h-14 bg-[#D0BCFF] rounded-full shadow-xl flex items-center justify-center hover:scale-105 transition-transform">
-                              <Play className="w-6 h-6 text-[#381E72] fill-current ml-1" />
-                            </button>
-                          </div>
+              <div className="space-y-12">
+                {isLoadingRecommendations ? (
+                  <div className="space-y-12">
+                    {[1, 2].map(i => (
+                      <div key={i}>
+                        <Skeleton className="h-8 w-48 mb-6 ml-2" />
+                        <div className="flex gap-6 overflow-x-auto pb-6 no-scrollbar">
+                          {[1, 2, 3, 4, 5].map(j => <TrackSkeleton key={j} />)}
                         </div>
-                        <h4 className="font-bold text-lg text-[#E6E0E9] truncate mb-1">{track.title}</h4>
-                        <p className="text-sm text-[#CAC4D0] font-medium truncate">{track.artist}</p>
-                      </motion.div>
+                      </div>
                     ))}
                   </div>
+                ) : recommendedPlaylists.map((category, idx) => (
+                  <div key={idx}>
+                    <div className="flex justify-between items-end mb-6 px-2">
+                      <h3 className="text-2xl font-bold tracking-tight text-[#E6E0E9] font-display">{category.title}</h3>
+                    </div>
+                    <div className="flex gap-6 overflow-x-auto pb-6 no-scrollbar">
+                      {category.items.map((playlist) => (
+                        <motion.div 
+                          key={playlist.id}
+                          whileHover={{ y: -8, scale: 1.02 }}
+                          whileTap={{ scale: 0.98 }}
+                          className="bg-[#2B2930] p-4 rounded-[2rem] hover:bg-[#36343B] transition-all duration-300 group cursor-pointer border border-white/5 shadow-md shrink-0 w-48"
+                          onClick={() => openYoutubePlaylist(playlist.id, playlist.name, playlist.image)}
+                        >
+                          <div className="relative mb-4 aspect-square rounded-2xl overflow-hidden shadow-inner">
+                            <img src={playlist.image} alt={playlist.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" />
+                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-sm">
+                              <div className="w-12 h-12 bg-[#D0BCFF] rounded-full flex items-center justify-center shadow-xl scale-75 group-hover:scale-100 transition-transform duration-300">
+                                <Play className="w-6 h-6 text-[#381E72] fill-current ml-1" />
+                              </div>
+                            </div>
+                          </div>
+                          <h4 className="font-bold text-base text-[#E6E0E9] truncate mb-1">{playlist.name}</h4>
+                          <p className="text-xs text-[#CAC4D0] font-medium truncate">{playlist.channelTitle}</p>
+                        </motion.div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Trending Now */}
+              <div>
+                <div className="flex justify-between items-end mb-6 px-2">
+                  <h3 className="text-2xl font-bold tracking-tight text-[#E6E0E9] font-display">Trending Now</h3>
                 </div>
-              )}
+                <div className="flex gap-6 overflow-x-auto pb-6 no-scrollbar">
+                  {trendingTracks.length === 0 ? (
+                    [1, 2, 3, 4, 5].map(i => <TrackSkeleton key={i} />)
+                  ) : trendingTracks.map((track) => (
+                    <motion.div 
+                      key={track.id}
+                      whileHover={{ y: -8, scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      className="bg-[#2B2930] p-4 rounded-[2rem] hover:bg-[#36343B] transition-all duration-300 group cursor-pointer border border-white/5 shadow-md shrink-0 w-48"
+                      onClick={() => playTrack(track)}
+                    >
+                      <div className="relative mb-4 aspect-square rounded-2xl overflow-hidden shadow-inner">
+                        <img src={track.thumbnail} alt={track.title} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" />
+                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-sm">
+                          {currentTrack?.id === track.id ? (
+                            <Visualizer isPlaying={isPlaying} count={5} className="h-8" />
+                          ) : (
+                            <div className="w-12 h-12 bg-[#D0BCFF] rounded-full flex items-center justify-center shadow-xl scale-75 group-hover:scale-100 transition-transform duration-300">
+                              <Play className="w-6 h-6 text-[#381E72] fill-current ml-1" />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <h4 className="font-bold text-base text-[#E6E0E9] truncate mb-1">{track.title}</h4>
+                      <p className="text-xs text-[#CAC4D0] font-medium truncate">{track.artist}</p>
+                    </motion.div>
+                  ))}
+                </div>
+              </div>
             </section>
           )}
 
@@ -760,8 +783,8 @@ export default function App() {
 
               <div className="px-4">
                 {isLoadingPlaylistItems ? (
-                  <div className="flex justify-center py-12">
-                    <div className="w-8 h-8 border-4 border-[#D0BCFF] border-t-transparent rounded-full animate-spin"></div>
+                  <div className="space-y-4">
+                    {[1, 2, 3, 4, 5, 6, 7, 8].map(i => <TrackSkeleton key={i} />)}
                   </div>
                 ) : activePlaylist.tracks.length === 0 ? (
                   <div className="text-center py-12 bg-[#2B2930] rounded-[2rem] border border-white/5">
@@ -783,8 +806,14 @@ export default function App() {
                         onClick={() => playTrack(track)}
                       >
                         <div className="flex items-center justify-center w-8">
-                          <span className="text-[#CAC4D0] font-medium group-hover:hidden">{index + 1}</span>
-                          <GripVertical className="w-5 h-5 text-[#CAC4D0] hidden group-hover:block cursor-grab active:cursor-grabbing" />
+                          {currentTrack?.id === track.id ? (
+                            <Visualizer isPlaying={isPlaying} count={3} className="h-4" />
+                          ) : (
+                            <>
+                              <span className="text-[#CAC4D0] font-medium group-hover:hidden">{index + 1}</span>
+                              <GripVertical className="w-5 h-5 text-[#CAC4D0] hidden group-hover:block cursor-grab active:cursor-grabbing" />
+                            </>
+                          )}
                         </div>
                         <img src={track.thumbnail} alt={track.title} className="w-12 h-12 rounded-lg object-cover mx-4" />
                         <div className="flex-1 min-w-0 pr-4">
@@ -836,6 +865,15 @@ export default function App() {
                       >
                         <div className="relative mb-4 aspect-square">
                           <img src={track.thumbnail} alt={track.title} className="w-full h-full object-cover rounded-[1.5rem] shadow-md" />
+                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-sm rounded-[1.5rem]">
+                            {currentTrack?.id === track.id ? (
+                              <Visualizer isPlaying={isPlaying} count={5} className="h-10" />
+                            ) : (
+                              <div className="w-14 h-14 bg-[#D0BCFF] rounded-full flex items-center justify-center shadow-xl scale-75 group-hover:scale-100 transition-transform duration-300">
+                                <Play className="w-7 h-7 text-[#381E72] fill-current ml-1" />
+                              </div>
+                            )}
+                          </div>
                           <div className="absolute bottom-3 right-3 flex items-center space-x-2 opacity-0 group-hover:opacity-100 transition-all duration-300 scale-90 group-hover:scale-100">
                             <button 
                               onClick={(e) => {
@@ -849,9 +887,6 @@ export default function App() {
                             </button>
                             <button onClick={(e) => addToQueue(e, track)} className="w-10 h-10 bg-[#4A4458]/90 backdrop-blur-md rounded-full flex items-center justify-center hover:bg-[#D0BCFF] hover:text-[#381E72] text-[#E8DEF8] transition-colors shadow-lg">
                               <ListPlus className="w-4 h-4" />
-                            </button>
-                            <button className="w-14 h-14 bg-[#D0BCFF] rounded-full shadow-lg flex items-center justify-center hover:scale-105 transition-transform">
-                              <Play className="w-7 h-7 text-[#381E72] fill-current ml-1" />
                             </button>
                           </div>
                         </div>
@@ -957,7 +992,7 @@ export default function App() {
             animate={{ x: 0, opacity: 1 }}
             exit={{ x: '100%', opacity: 0 }}
             transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-            className="fixed top-0 right-0 bottom-0 w-80 bg-[#1D1B20]/95 backdrop-blur-3xl border-l border-white/10 z-30 p-6 pt-8 overflow-y-auto shadow-2xl"
+            className="fixed top-0 right-0 bottom-0 w-80 glass border-l border-white/10 z-30 p-6 pt-8 overflow-y-auto shadow-2xl"
           >
             <div className="flex justify-between items-center mb-8">
               <h3 className="text-2xl font-bold tracking-tight text-[#E8DEF8]">Queue</h3>
@@ -975,7 +1010,7 @@ export default function App() {
                     <p className="text-sm font-bold text-[#D0BCFF] truncate">{currentTrack.title}</p>
                     <p className="text-xs text-[#E8DEF8] truncate">{currentTrack.artist}</p>
                   </div>
-                  <div className="w-4 h-4 rounded-full bg-[#D0BCFF] animate-pulse"></div>
+                  <Visualizer isPlaying={isPlaying} count={4} className="h-6" />
                 </div>
               ) : (
                 <p className="text-[#CAC4D0] text-sm">Nothing is playing.</p>
@@ -1038,139 +1073,58 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Floating Player Bar (M3 Expressive) */}
-      <footer className={cn(
-        "fixed bottom-6 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-5xl h-[5.5rem] bg-[#2B2930]/90 backdrop-blur-2xl rounded-[2.5rem] px-4 flex items-center justify-between z-40 shadow-[0_20px_40px_rgba(0,0,0,0.4)] border border-white/10 transition-all duration-500",
-        currentTrack ? "translate-y-0 opacity-100" : "translate-y-32 opacity-0 pointer-events-none"
-      )}>
-        {/* Progress Bar (Absolute Top) */}
-        <div className="absolute top-0 left-6 right-6 h-1 bg-[#4A4458]/50 rounded-full overflow-hidden group cursor-pointer" onClick={(e) => {
-          const rect = e.currentTarget.getBoundingClientRect();
-          const percent = (e.clientX - rect.left) / rect.width;
-          if (playerRef.current && duration) {
-            playerRef.current.seekTo(percent * duration);
-            setProgress(percent * duration);
-          }
-        }}>
-          <div 
-            className="h-full bg-[#D0BCFF] rounded-full group-hover:bg-[#E8DEF8] transition-colors relative"
-            style={{ width: `${duration ? (progress / duration) * 100 : 0}%` }}
-          >
-            <div className="absolute right-0 top-1/2 -translate-y-1/2 w-2 h-2 bg-white rounded-full opacity-0 group-hover:opacity-100 shadow-md transition-opacity"></div>
-          </div>
-        </div>
+      {/* Integrated Contextual Dock */}
+      <motion.footer
+        layout
+        className="fixed bottom-6 left-6 right-6 z-50 h-20 glass-dark rounded-[2.5rem] border border-white/10 shadow-2xl flex items-center px-6 gap-6"
+      >
+        {/* Navigation */}
+        <nav className="flex items-center gap-2">
+          <button onClick={() => setActiveTab('home')} className={cn("p-3 rounded-full transition-colors", activeTab === 'home' ? "bg-[#D0BCFF] text-[#381E72]" : "text-[#CAC4D0] hover:bg-white/5")}>
+            <Home className="w-5 h-5" />
+          </button>
+          <button onClick={() => setActiveTab('search')} className={cn("p-3 rounded-full transition-colors", activeTab === 'search' ? "bg-[#D0BCFF] text-[#381E72]" : "text-[#CAC4D0] hover:bg-white/5")}>
+            <Search className="w-5 h-5" />
+          </button>
+          <button onClick={() => setActiveTab('library')} className={cn("p-3 rounded-full transition-colors", activeTab === 'library' ? "bg-[#D0BCFF] text-[#381E72]" : "text-[#CAC4D0] hover:bg-white/5")}>
+            <Library className="w-5 h-5" />
+          </button>
+        </nav>
 
-        {/* Track Info */}
-        <div className="flex items-center w-[30%] space-x-4 pl-2">
-          {currentTrack ? (
+        {/* Player Controls */}
+        <div className="flex-1 flex items-center gap-4 min-w-0" onClick={() => currentTrack && setIsFullScreenPlayerOpen(true)}>
+          {currentTrack && (
             <>
-              <div 
-                className="relative w-14 h-14 rounded-2xl shadow-md overflow-hidden group cursor-pointer shrink-0"
-                onClick={() => setIsFullScreenPlayerOpen(true)}
-              >
-                <img src={currentTrack.thumbnail} alt={currentTrack.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
-                <div className="absolute inset-0 bg-black/20 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
-                  <Maximize2 className="w-5 h-5 text-white" />
-                </div>
+              <img src={currentTrack.thumbnail} alt="" className="w-12 h-12 rounded-xl object-cover shrink-0" referrerPolicy="no-referrer" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-bold text-[#E6E0E9] truncate">{currentTrack.title}</p>
+                <p className="text-[10px] text-[#CAC4D0] truncate uppercase tracking-wider">{currentTrack.artist}</p>
               </div>
-              <div className="flex flex-col overflow-hidden">
-                <span 
-                  className="font-bold text-[#E6E0E9] text-sm md:text-base truncate hover:underline cursor-pointer"
-                  onClick={() => setIsFullScreenPlayerOpen(true)}
-                >
-                  {currentTrack.title}
-                </span>
-                <span className="text-xs md:text-sm text-[#CAC4D0] truncate hover:underline cursor-pointer">{currentTrack.artist}</span>
-              </div>
-              <div className="hidden md:flex items-center space-x-1 ml-2 shrink-0">
-                <button 
-                  onClick={() => {
-                    setTrackToAdd(currentTrack);
-                    setIsAddToPlaylistModalOpen(true);
-                  }}
-                  className="p-2 text-[#CAC4D0] hover:text-[#D0BCFF] hover:bg-[#D0BCFF]/10 rounded-full transition-colors"
-                >
-                  <PlusSquare className="w-5 h-5" />
+              <div className="flex items-center gap-2">
+                <button onClick={(e) => { e.stopPropagation(); playPrevious(); }} className="text-[#CAC4D0] hover:text-[#E6E0E9]"><SkipBack className="w-5 h-5" /></button>
+                <button onClick={(e) => { e.stopPropagation(); setIsPlaying(!isPlaying); }} className="w-10 h-10 bg-[#D0BCFF] rounded-full flex items-center justify-center text-[#381E72]">
+                  {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
                 </button>
-                <button className="p-2 text-[#CAC4D0] hover:text-[#FFD8E4] hover:bg-[#FFD8E4]/10 rounded-full transition-colors">
-                  <Heart className="w-5 h-5" />
-                </button>
+                <button onClick={(e) => { e.stopPropagation(); playNext(); }} className="text-[#CAC4D0] hover:text-[#E6E0E9]"><SkipForward className="w-5 h-5" /></button>
               </div>
             </>
-          ) : (
-            <div className="flex items-center space-x-4 opacity-50 pl-2">
-              <div className="w-14 h-14 bg-[#4A4458] rounded-2xl"></div>
-              <div className="flex flex-col space-y-2">
-                <div className="w-24 h-3 bg-[#4A4458] rounded"></div>
-                <div className="w-16 h-2 bg-[#4A4458] rounded"></div>
-              </div>
-            </div>
           )}
         </div>
 
-        {/* Controls */}
-        <div className="flex flex-col items-center justify-center w-[40%]">
-          <div className="flex items-center justify-center space-x-4 md:space-x-6">
-            <button className="text-[#CAC4D0] hover:text-[#E6E0E9] transition-colors hidden sm:block"><Shuffle className="w-5 h-5" /></button>
-            <button onClick={playPrevious} className="text-[#E6E0E9] hover:text-[#D0BCFF] transition-colors p-2 hover:bg-white/5 rounded-full"><SkipBack className="w-6 h-6 fill-current" /></button>
-            <motion.button 
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              onClick={togglePlay}
-              disabled={!currentTrack}
-              className="w-14 h-14 bg-[#D0BCFF] text-[#381E72] rounded-full flex items-center justify-center disabled:opacity-50 shadow-lg hover:shadow-xl hover:bg-[#E8DEF8] transition-all"
-            >
-              <AnimatePresence mode="wait">
-                {isPlaying ? (
-                  <motion.div key="pause" initial={{ opacity: 0, scale: 0.5 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.5 }} transition={{ duration: 0.15 }}>
-                    <Pause className="w-6 h-6 fill-current" />
-                  </motion.div>
-                ) : (
-                  <motion.div key="play" initial={{ opacity: 0, scale: 0.5 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.5 }} transition={{ duration: 0.15 }}>
-                    <Play className="w-6 h-6 fill-current ml-1" />
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </motion.button>
-            <button onClick={playNext} className="text-[#E6E0E9] hover:text-[#D0BCFF] transition-colors p-2 hover:bg-white/5 rounded-full"><SkipForward className="w-6 h-6 fill-current" /></button>
-            <button className="text-[#CAC4D0] hover:text-[#E6E0E9] transition-colors hidden sm:block"><Repeat className="w-5 h-5" /></button>
-          </div>
-        </div>
-
-        {/* Volume & Extras */}
-        <div className="flex items-center justify-end w-[30%] space-x-2 md:space-x-4 pr-2">
-          <div className="hidden lg:flex items-center space-x-2 text-xs font-medium text-[#CAC4D0] mr-4">
-            <span>{formatTime(progress)}</span>
-            <span>/</span>
-            <span>{formatTime(duration)}</span>
-          </div>
-          <button 
-            onClick={() => setIsQueueOpen(!isQueueOpen)} 
-            className={cn(
-              "p-2.5 rounded-full transition-colors relative", 
-              isQueueOpen ? "text-[#381E72] bg-[#D0BCFF]" : "text-[#CAC4D0] hover:text-[#E6E0E9] hover:bg-white/5"
-            )}
-          >
-            <ListMusic className="w-5 h-5" />
-            {queue.length > 0 && !isQueueOpen && (
-              <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-[#D0BCFF] rounded-full border-2 border-[#2B2930]"></span>
-            )}
-          </button>
-          <div className="hidden md:flex items-center space-x-2 group">
-            <button className="p-2 text-[#CAC4D0] hover:text-[#E6E0E9] rounded-full hover:bg-white/5 transition-colors">
-              <Volume2 className="w-5 h-5" />
+        {/* Contextual Actions */}
+        <div className="flex items-center gap-2">
+          {activeTab !== 'home' && (
+            <button className="flex items-center gap-2 px-4 py-2 rounded-full bg-[#D0BCFF]/10 text-[#D0BCFF] hover:bg-[#D0BCFF]/20 text-xs font-bold uppercase">
+              {activeTab === 'search' ? <><Filter className="w-4 h-4" /> Filter</> : <><Plus className="w-4 h-4" /> Playlist</>}
             </button>
-            <input 
-              type="range" 
-              min="0" 
-              max="100" 
-              value={volume}
-              onChange={handleVolumeChange}
-              className="w-20 h-1 bg-[#4A4458] rounded-full appearance-none cursor-pointer accent-[#D0BCFF] hover:accent-[#E8DEF8] transition-all opacity-0 group-hover:opacity-100 -ml-2 group-hover:ml-0"
-            />
-          </div>
+          )}
+          <button onClick={() => setIsQueueOpen(!isQueueOpen)} className={cn("p-3 rounded-full transition-colors", isQueueOpen ? "bg-[#D0BCFF] text-[#381E72]" : "text-[#CAC4D0] hover:bg-white/5")}>
+            <ListMusic className="w-5 h-5" />
+          </button>
         </div>
-      </footer>
+      </motion.footer>
+
+      {/* Mobile Player Bar - Removed in favor of integrated Bento Dock controls */}
 
       {/* Visible YouTube Player Container (M3 Expressive) */}
       <div className={cn(
@@ -1180,6 +1134,13 @@ export default function App() {
           : cn("bottom-32 w-80 aspect-video bg-[#141218] rounded-[2rem] border border-white/10", isQueueOpen ? "right-[22rem]" : "right-8"),
         !currentTrack && !isFullScreenPlayerOpen ? "translate-y-12 opacity-0 scale-95 pointer-events-none" : "translate-y-0 opacity-100 scale-100"
       )}>
+        {/* Immersive Background for Full Screen */}
+        {isFullScreenPlayerOpen && (
+          <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none">
+            <div className="absolute top-1/4 left-1/4 w-[80vw] h-[80vw] bg-[#381E72] rounded-full mix-blend-screen filter blur-[150px] opacity-20 animate-pulse"></div>
+            <div className="absolute bottom-1/4 right-1/4 w-[60vw] h-[60vw] bg-[#D0BCFF] rounded-full mix-blend-screen filter blur-[120px] opacity-10 animate-pulse" style={{ animationDelay: '1s' }}></div>
+          </div>
+        )}
         {/* Header for Mini Player */}
         {!isFullScreenPlayerOpen && (
           <div 
@@ -1315,30 +1276,18 @@ export default function App() {
               </div>
 
               {/* Controls */}
-              <div className="flex items-center justify-between">
-                <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} className="text-[#CAC4D0] hover:text-[#E6E0E9] transition-colors"><Shuffle className="w-8 h-8" /></motion.button>
-                <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={playPrevious} className="text-[#E6E0E9] hover:text-[#D0BCFF] transition-colors"><SkipBack className="w-12 h-12 fill-current" /></motion.button>
-                <motion.button 
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  onClick={togglePlay}
-                  className="w-24 h-24 bg-[#D0BCFF] text-[#381E72] rounded-[2rem] flex items-center justify-center shadow-xl"
-                >
-                  <AnimatePresence mode="wait">
-                    {isPlaying ? (
-                      <motion.div key="pause-fs" initial={{ opacity: 0, scale: 0.5 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.5 }} transition={{ duration: 0.15 }}>
-                        <Pause className="w-12 h-12 fill-current" />
-                      </motion.div>
-                    ) : (
-                      <motion.div key="play-fs" initial={{ opacity: 0, scale: 0.5 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.5 }} transition={{ duration: 0.15 }}>
-                        <Play className="w-12 h-12 fill-current ml-2" />
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </motion.button>
-                <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={playNext} className="text-[#E6E0E9] hover:text-[#D0BCFF] transition-colors"><SkipForward className="w-12 h-12 fill-current" /></motion.button>
-                <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} className="text-[#CAC4D0] hover:text-[#E6E0E9] transition-colors"><Repeat className="w-8 h-8" /></motion.button>
-              </div>
+              <PlayerControls 
+                isPlaying={isPlaying}
+                onTogglePlay={togglePlay}
+                onNext={playNext}
+                onPrevious={playPrevious}
+                isShuffle={isShuffle}
+                onToggleShuffle={toggleShuffle}
+                repeatMode={repeatMode}
+                onToggleRepeat={toggleRepeat}
+                size="lg"
+                className="space-x-12"
+              />
 
               {/* Bottom Actions */}
               <div className="flex items-center justify-between pt-8 border-t border-white/10">

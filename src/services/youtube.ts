@@ -1,19 +1,19 @@
 import { Track } from '../types';
 
-const YOUTUBE_API_KEY = (import.meta as any).env.VITE_YOUTUBE_API_KEY || (process as any).env.YOUTUBE_API_KEY || '';
-
 export async function searchYouTube(query: string): Promise<Track[]> {
-  if (!YOUTUBE_API_KEY) {
-    console.warn('YouTube API Key is missing. Search will not work.');
-    return [];
-  }
-
   try {
     const response = await fetch(
-      `https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=10&q=${encodeURIComponent(
+      `/api/youtube/search?part=snippet&maxResults=10&q=${encodeURIComponent(
         query + ' music'
-      )}&type=video&key=${YOUTUBE_API_KEY}`
+      )}&type=video`
     );
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error('YouTube Proxy Error:', errorData);
+      return [];
+    }
+
     const data = await response.json();
 
     if (data.error) {
@@ -35,14 +35,19 @@ export async function searchYouTube(query: string): Promise<Track[]> {
 }
 
 export async function searchPlaylists(query: string): Promise<any[]> {
-  if (!YOUTUBE_API_KEY) return [];
-
   try {
     const response = await fetch(
-      `https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=5&q=${encodeURIComponent(
+      `/api/youtube/search?part=snippet&maxResults=5&q=${encodeURIComponent(
         query
-      )}&type=playlist&key=${YOUTUBE_API_KEY}`
+      )}&type=playlist`
     );
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error('YouTube Proxy Error (Playlists):', errorData);
+      return [];
+    }
+
     const data = await response.json();
 
     if (data.error) {
@@ -63,12 +68,17 @@ export async function searchPlaylists(query: string): Promise<any[]> {
 }
 
 export async function getPlaylistItems(playlistId: string): Promise<Track[]> {
-  if (!YOUTUBE_API_KEY) return [];
-
   try {
     const response = await fetch(
-      `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&maxResults=20&playlistId=${playlistId}&key=${YOUTUBE_API_KEY}`
+      `/api/youtube/playlistItems?part=snippet&maxResults=20&playlistId=${playlistId}`
     );
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error('YouTube Proxy Error (Playlist Items):', errorData);
+      return [];
+    }
+
     const data = await response.json();
 
     if (data.error) {
@@ -92,12 +102,17 @@ export async function getPlaylistItems(playlistId: string): Promise<Track[]> {
 }
 
 export async function getTrendingMusic(): Promise<Track[]> {
-  if (!YOUTUBE_API_KEY) return [];
-
   try {
     const response = await fetch(
-      `https://www.googleapis.com/youtube/v3/videos?part=snippet&chart=mostPopular&maxResults=10&videoCategoryId=10&key=${YOUTUBE_API_KEY}`
+      `/api/youtube/videos?part=snippet&chart=mostPopular&maxResults=10&videoCategoryId=10`
     );
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error('YouTube Proxy Error (Trending):', errorData);
+      return [];
+    }
+
     const data = await response.json();
 
     if (data.error) {

@@ -1,6 +1,54 @@
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
 @import "tailwindcss";
 
 @theme {
   --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --color-primary: var(--color-primary);
+  --color-secondary: var(--color-secondary);
+  --color-bg: var(--color-bg);
+  --color-surface: var(--color-surface);
+  --color-text: var(--color-text);
+  --color-text-muted: var(--color-text-muted);
+}
+
+@layer utilities {
+  .glass {
+    @apply bg-white/5 backdrop-blur-xl border border-white/10;
+  }
+  
+  .glass-dark {
+    @apply bg-black/20 backdrop-blur-2xl border border-white/5;
+  }
+
+  .text-glow {
+    text-shadow: 0 0 20px rgba(208, 188, 255, 0.3);
+  }
+}
+
+:root {
+  --color-primary: #D0BCFF;
+  --color-secondary: #381E72;
+  --color-bg: #1D1B20;
+  --color-surface: #2B2930;
+  --color-text: #E6E0E9;
+  --color-text-muted: #CAC4D0;
+}
+
+.theme-ocean {
+  --color-primary: #82D3E0;
+  --color-secondary: #004F58;
+  --color-bg: #0B1E22;
+  --color-surface: #162D31;
+  --color-text: #E0F7FA;
+  --color-text-muted: #B2DFDB;
+}
+
+.theme-sunset {
+  --color-primary: #FFB4AB;
+  --color-secondary: #93000A;
+  --color-bg: #201616;
+  --color-surface: #362929;
+  --color-text: #F9DEDC;
+  --color-text-muted: #E0B0AA;
 }
